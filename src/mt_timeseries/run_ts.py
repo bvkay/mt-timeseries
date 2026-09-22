@@ -39,7 +39,11 @@ except ImportError:
     Stream = None
 
 from .channel_ts import ChannelTS
-from .ts_helpers import get_decimation_sample_rates, make_dt_coordinates
+from .ts_helpers import (
+    get_decimation_sample_rates,
+    make_dt_coordinates,
+    sample_rate_matches_step,
+)
 
 # =============================================================================
 # make a dictionary of available metadata classes
@@ -1082,7 +1086,9 @@ class RunTS:
                 self._sample_rate = data_sr
 
             # if sample rates don't match, update to data value
-            elif self.sample_rate != data_sr:
+            elif not sample_rate_matches_step(
+                self.sample_rate, 1.0 / data_sr, self.dataset.coords["time"].size
+            ):
                 msg = (
                     f"sample rate of dataset {data_sr} does not "
                     f"match metadata sample rate {self.sample_rate} "
@@ -1344,7 +1350,9 @@ class RunTS:
         Returns
         -------
         float
-            Sample rate in samples per second, rounded to nearest integer.
+            Sample rate in samples per second: a channel's metadata rate,
+            else the nearest integer, when the index steps at it (see
+            sample_rate_matches_step); otherwise the rate of the index.
 
         Raises
         ------
@@ -1362,10 +1370,16 @@ class RunTS:
                 1, "s"
             )
             best_dt, counts = scipy.stats.mode(dt_array)
-            return round(
-                1.0 / np.float64(best_dt),
-                0,
-            )
+            candidates = [
+                self.dataset[ch].attrs.get("sample_rate") for ch in self.channels
+            ]
+            candidates.append(round(1.0 / np.float64(best_dt), 0))
+            for sample_rate in candidates:
+                if isinstance(sample_rate, float) and sample_rate_matches_step(
+                    sample_rate, best_dt, dt_array.size + 1
+                ):
+                    return sample_rate
+            return 1.0 / np.float64(best_dt)
         except AttributeError:
             self.logger.warning("Something weird happend with xarray time indexing")
 

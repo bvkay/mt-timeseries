@@ -8,6 +8,8 @@ Created on Wed Mar 29 14:30:08 2023
 import sys
 import unittest
 
+import numpy as np
+
 # =============================================================================
 # Imports
 # =============================================================================
@@ -17,6 +19,7 @@ from mt_timeseries.ts_helpers import (
     _count_decimal_sig_figs,
     get_decimation_sample_rates,
     make_dt_coordinates,
+    sample_rate_matches_step,
 )
 
 # =============================================================================
@@ -170,6 +173,40 @@ class TestMakeDtCoordinates(unittest.TestCase):
             # This assertion indicates that the difference is in the first delta.
             assert delta_t1[0] != delta_t2[0]
             assert (delta_t1[1:] == delta_t2[1:]).all()
+
+
+class TestMakeDtCoordinatesResolution(unittest.TestCase):
+    def test_ns_unit(self):
+        """pandas 3 infers microseconds from the end time for 3600 samples"""
+        dt = make_dt_coordinates("2009-06-16T02:01:04", 10.00064, 3600)
+        with self.subTest("unit"):
+            self.assertEqual(dt.unit, "ns")
+        with self.subTest("steps"):
+            self.assertLessEqual(set(np.diff(dt.asi8)), {99_993_600, 99_993_601})
+
+    def test_whole_microsecond_rate(self):
+        dt = make_dt_coordinates("2020-01-01T00:00:00", 1000, 3_600_000)
+        self.assertEqual(set(np.diff(dt.asi8)), {1_000_000})
+
+
+class TestSampleRateMatchesStep(unittest.TestCase):
+    def test_match(self):
+        self.assertTrue(sample_rate_matches_step(1.5, 0.666666666, 36000))
+        self.assertTrue(sample_rate_matches_step(10.00064, 0.0999936, 36000))
+
+    def test_no_match(self):
+        self.assertFalse(sample_rate_matches_step(2.0, 0.666666666, 36000))
+        self.assertFalse(sample_rate_matches_step(10.0, 0.0999936, 36000))
+
+    def test_short_index(self):
+        """1 us over the index: MTime rounds the end time to the microsecond"""
+        self.assertTrue(sample_rate_matches_step(2048.0, 0.0004885, 3))
+        self.assertFalse(sample_rate_matches_step(2048.0, 0.0004885, 36000))
+
+    def test_no_rate(self):
+        self.assertFalse(sample_rate_matches_step(None, 0.1, 100))
+        self.assertFalse(sample_rate_matches_step(0.0, 0.1, 100))
+        self.assertFalse(sample_rate_matches_step(10.0, 0.1, 1))
 
 
 class TestDecimalSigFigs(unittest.TestCase):

@@ -240,10 +240,14 @@ def make_dt_coordinates(
             end_time = MTime(time_stamp=end_time)
     # dt_freq = "{0:.0f}N".format(1.0e9 / (sample_rate))
 
+    # unit="ns": pandas >= 3 takes the unit from the digits of the end time,
+    # us for some n_samples, which truncates the steps of a rate such as
+    # 10.00064 Hz to whole microseconds
     dt_index = pd.date_range(
         start=start_time.iso_no_tz,
         end=end_time.iso_no_tz,
         periods=int(round(n_samples)),
+        unit="ns",
     )
 
     ## need to enforce some rounding errors otherwise an expected time step
@@ -263,3 +267,31 @@ def make_dt_coordinates(
     else:
         pass
     return dt_index
+
+
+def sample_rate_matches_step(
+    sample_rate: float | None, step: float, n_samples: int
+) -> bool:
+    """
+    Check that a time index steps at a sample rate.
+
+    Parameters
+    ----------
+    sample_rate : float | None
+        Sample rate in samples per second.
+    step : float
+        Step of the index in seconds, its mean or its most common step.
+    n_samples : int
+        Number of samples in the index.
+
+    Returns
+    -------
+    bool
+        True if 1 / sample_rate is within 1 ns of step, the resolution of the
+        index, or within 1 us over the whole index: make_dt_coordinates
+        starts from an end time that MTime rounds to the microsecond.
+    """
+    if sample_rate in [0, None] or n_samples < 2:
+        return False
+    tolerance = max(1e-9, 1e-6 / (n_samples - 1))
+    return abs(1.0 / sample_rate - step) <= tolerance
