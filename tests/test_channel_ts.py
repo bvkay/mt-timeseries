@@ -493,8 +493,9 @@ class TestChannelTSDataInput:
                 == auxiliary_ts.channel_metadata.time_period.end.iso_no_tz
             )
 
+        # 4096 samples from 12:00:00 to 12:00:01: 4095 steps of 1/4095 s
         with subtests.test(name="sample_rate"):
-            assert auxiliary_ts.sample_rate == 4096.0
+            assert auxiliary_ts.sample_rate == 4095.0
 
         with subtests.test(name="n_samples"):
             assert auxiliary_ts.n_samples == n_samples
@@ -579,6 +580,93 @@ class TestChannelTSSampleRate:
 
         assert ts.sample_rate != data_ts.sample_rate
         assert ts.sample_rate == sample_rate
+
+
+class TestChannelTSNonIntegerSampleRate:
+    """The time index steps at the metadata rate, not at it rounded"""
+
+    @staticmethod
+    def make_channel(sample_rate, n_samples=36000):
+        ch_metadata = metadata.Magnetic(component="hx", sample_rate=sample_rate)
+        ch_metadata.time_period.start = "2009-06-16T02:01:04+00:00"
+        return timeseries.ChannelTS(
+            "magnetic", data=np.zeros(n_samples), channel_metadata=ch_metadata
+        )
+
+    @pytest.mark.parametrize(
+        "sample_rate, first_step",
+        [
+            (10.00064, 99_993_600),
+            (1.5, 666_666_666),
+            (2.5, 400_000_000),
+            (1000.4, 999_600),
+            (0.1, 10_000_000_000),
+            (10.000640040962622, 99_993_600),
+            (1000.0, 1_000_000),
+        ],
+    )
+    def test_index_steps(self, sample_rate, first_step, subtests):
+        ts = self.make_channel(sample_rate)
+        t_ns = ts.data_array.indexes["time"].as_unit("ns").asi8
+        exact = np.arange(t_ns.size) * 1e9 / sample_rate
+
+        with subtests.test(name="first_step"):
+            assert t_ns[1] - t_ns[0] == first_step
+        with subtests.test(name="every_step"):
+            assert np.abs(np.diff(t_ns) - 1e9 / sample_rate).max() <= 1
+        with subtests.test(name="whole_index"):
+            assert np.abs((t_ns - t_ns[0]) - exact).max() <= 2
+        with subtests.test(name="sample_rate"):
+            assert ts.sample_rate == sample_rate
+        with subtests.test(name="metadata"):
+            assert ts.channel_metadata.sample_rate == sample_rate
+
+    def test_index_resolution(self):
+        """pandas 3 infers microseconds from the end time for 3600 samples"""
+        index = self.make_channel(10.00064, 3600).data_array.indexes["time"]
+        assert index.unit == "ns"
+        assert set(np.diff(index.asi8)) <= {99_993_600, 99_993_601}
+
+    def test_series_index_steps(self):
+        ts = timeseries.ChannelTS(
+            "magnetic",
+            data=pd.Series(np.zeros(100)),
+            channel_metadata={"component": "hx", "sample_rate": 1.5},
+        )
+        t_ns = ts.data_array.indexes["time"].as_unit("ns").asi8
+        assert t_ns[1] - t_ns[0] == 666_666_666
+        assert ts.sample_rate == 1.5
+
+    @pytest.mark.parametrize(
+        "sample_rate", [10.00064, 1.5, 2.5, 1000.4, 0.1, 10.000640040962622, 1000.0]
+    )
+    @pytest.mark.parametrize("n_samples", [2, 3, 101, 36000])
+    def test_rate_from_data_array(self, sample_rate, n_samples, subtests):
+        """compute_sample_rate keeps the metadata rate and leaves the index"""
+        data_array = self.make_channel(sample_rate, n_samples).to_xarray()
+        ts = timeseries.ChannelTS("magnetic", data=data_array)
+
+        with subtests.test(name="metadata"):
+            assert ts.channel_metadata.sample_rate == sample_rate
+        with subtests.test(name="index"):
+            assert ts.data_array.indexes["time"].equals(data_array.indexes["time"])
+
+    def test_rate_from_index(self):
+        """No rate in the metadata: the rate of the index, not rounded"""
+        data_array = self.make_channel(10.00064).to_xarray()
+        data_array.attrs["sample_rate"] = 0.0
+        ts = timeseries.ChannelTS("magnetic", data=data_array)
+        assert ts.sample_rate == pytest.approx(10.00064, abs=1e-9)
+
+    def test_rate_with_gap(self):
+        """An index with a gap keeps the rate of its steps"""
+        index = pd.date_range("2020-01-01", periods=36000, freq="1ms")
+        index = index.delete(slice(500, 510))
+        ts = timeseries.ChannelTS(
+            "auxiliary",
+            data=pd.DataFrame({"data": np.zeros(index.size)}, index=index),
+        )
+        assert ts.sample_rate == 1000.0
 
 
 # =============================================================================

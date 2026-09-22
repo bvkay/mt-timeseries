@@ -41,7 +41,11 @@ except ImportError:
 
 from . import fdsn_tools
 from .ts_filters import RemoveInstrumentResponse
-from .ts_helpers import get_decimation_sample_rates, make_dt_coordinates
+from .ts_helpers import (
+    get_decimation_sample_rates,
+    make_dt_coordinates,
+    sample_rate_matches_step,
+)
 
 # =============================================================================
 # make a dictionary of available metadata classes
@@ -859,6 +863,29 @@ class ChannelTS:
             else:
                 raise ValueError("Channel 'component' cannot be None")
 
+    def _make_time_index(self, n_samples: int) -> pd.DatetimeIndex:
+        """
+        Time index of n_samples from the start time at the metadata sample
+        rate, not the sample_rate property, which rounds it to an integer
+        while the channel has no data.
+
+        Parameters
+        ----------
+        n_samples : int
+            Number of samples.
+
+        Returns
+        -------
+        pandas.DatetimeIndex
+            Time index.
+        """
+        sample_rate = self.channel_metadata.sample_rate
+        if sample_rate in [0.0, None]:
+            return make_dt_coordinates(self.start, self.sample_rate, n_samples)
+        dt = make_dt_coordinates(self.start, sample_rate, n_samples)
+        self._sample_rate = sample_rate
+        return dt
+
     def _check_pd_index(self, ts_arr: pd.DataFrame | pd.Series) -> pd.DatetimeIndex:
         """
         Check and return the time index from a pandas DataFrame or Series.
@@ -876,7 +903,7 @@ class ChannelTS:
         if isinstance(ts_arr.index, pd.DatetimeIndex):
             return ts_arr.index
         else:
-            return make_dt_coordinates(self.start, self.sample_rate, ts_arr.shape[0])
+            return self._make_time_index(ts_arr.shape[0])
 
     def _validate_dataframe_input(
         self, ts_arr: pd.DataFrame
@@ -999,7 +1026,7 @@ class ChannelTS:
                     msg = f"Input array must be 1-D array not {ts_arr.shape}"
                     self.logger.error(msg)
                     raise ValueError(msg)
-            dt = make_dt_coordinates(self.start, self.sample_rate, ts_arr.size)
+            dt = self._make_time_index(ts_arr.size)
             self.data_array = xr.DataArray(
                 ts_arr, coords=[("time", dt)], name=self.component
             )
@@ -1240,21 +1267,34 @@ class ChannelTS:
         rounds nanoseconds is not consistent between samples, therefore taking the median provides better results
         if the time series is long this can be inefficient so test first
 
+        Returns the metadata sample rate, else the nearest integer, when the
+        index steps at it (see sample_rate_matches_step); otherwise the rate
+        of the index.
+
         """
+        time_index = self.data_array.coords.indexes["time"]
         if self.is_high_frequency():
-            dt_array = np.diff(self.data_array.coords.indexes["time"])
+            dt_array = np.diff(time_index)
             best_dt, counts = scipy.stats.mode(dt_array)
 
             # Calculate total seconds of the best dt and calculate sample rate
             best_dt_seconds = float(best_dt) / 1e9
             sr = 1 / best_dt_seconds
+            steps = [best_dt_seconds]
         else:
-            t_diff = (
-                self.data_array.coords.indexes["time"][-1]
-                - self.data_array.coords.indexes["time"][0]
-            )
-            sr = self.data_array.size / t_diff.total_seconds()
-        return np.round(sr, 0)
+            t_diff = time_index[-1] - time_index[0]
+            sr = (self.data_array.size - 1) / t_diff.total_seconds()
+            # the mean step, and the first step for an index with gaps
+            steps = [1.0 / sr, (time_index[1] - time_index[0]).total_seconds()]
+        # read the stored value: the channel_metadata getter calls back here
+        declared = self._survey_metadata.stations[0].runs[0].channels[0].sample_rate
+        for rate in [declared, np.round(sr, 0)]:
+            if any(
+                sample_rate_matches_step(rate, step, self.data_array.size)
+                for step in steps
+            ):
+                return rate
+        return sr
 
     # --> sample rate
     @property

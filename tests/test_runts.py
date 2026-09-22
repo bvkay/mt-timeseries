@@ -897,6 +897,53 @@ class TestRunTSPerformance:
         assert copied_run is not multi_channel_run_ts
 
 
+class TestRunTSNonIntegerSampleRate:
+    """RunTS keeps a sample rate that is not an integer"""
+
+    @staticmethod
+    def make_run(sample_rate, run_sample_rate=None, n_samples=36000):
+        channels = []
+        for component in ["hx", "hy"]:
+            ch_metadata = metadata.Magnetic(
+                component=component, sample_rate=sample_rate
+            )
+            ch_metadata.time_period.start = "2009-06-16T02:01:04+00:00"
+            channels.append(
+                ChannelTS(
+                    "magnetic",
+                    data=np.zeros(n_samples),
+                    channel_metadata=ch_metadata,
+                )
+            )
+        run_metadata = metadata.Run(id="001")
+        if run_sample_rate is not None:
+            run_metadata.sample_rate = run_sample_rate
+        return RunTS(channels, run_metadata=run_metadata)
+
+    @pytest.mark.parametrize(
+        "sample_rate", [10.00064, 1.5, 2.5, 1000.4, 0.1, 10.000640040962622, 1000.0]
+    )
+    @pytest.mark.parametrize("declared", [True, False])
+    def test_sample_rate(self, sample_rate, declared, subtests):
+        run = self.make_run(sample_rate, sample_rate if declared else None)
+        hx = run.hx
+
+        with subtests.test(name="sample_rate"):
+            assert run.sample_rate == sample_rate
+        with subtests.test(name="run_metadata"):
+            assert run.run_metadata.sample_rate == sample_rate
+        with subtests.test(name="channel_metadata"):
+            assert hx.channel_metadata.sample_rate == sample_rate
+        with subtests.test(name="channel_index"):
+            assert hx.data_array.indexes["time"].equals(run.dataset.indexes["time"])
+
+    @pytest.mark.parametrize("n_samples", [3, 10, 101])
+    def test_short_run(self, n_samples):
+        """The end time is rounded to the microsecond: 2048 Hz stays 2048"""
+        run = self.make_run(2048.0, n_samples=n_samples)
+        assert run.sample_rate == 2048.0
+
+
 # =============================================================================
 # Integration Tests
 # =============================================================================
