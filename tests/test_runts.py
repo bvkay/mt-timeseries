@@ -944,6 +944,29 @@ class TestRunTSNonIntegerSampleRate:
         assert run.sample_rate == 2048.0
 
 
+class TestRunTSStationChannelsRecorded:
+    """The station lists the run's channels, not the placeholder channel"""
+
+    @pytest.mark.parametrize(
+        "components", [["hx", "hy", "hz"], ["ex", "ey", "hx", "hy"]]
+    )
+    def test_channels_recorded(self, components):
+        channels = [
+            ChannelTS(
+                "electric" if comp.startswith("e") else "magnetic",
+                data=np.zeros(16),
+                channel_metadata={"component": comp, "sample_rate": 1.0},
+            )
+            for comp in components
+        ]
+        run = RunTS(
+            channels,
+            station_metadata=metadata.Station(id="ASP"),
+            run_metadata=metadata.Run(id="sr1_0001"),
+        )
+        assert run.station_metadata.channels_recorded == components
+
+
 # =============================================================================
 # Integration Tests
 # =============================================================================
