@@ -1112,6 +1112,9 @@ class RunTS:
         if self.run_metadata.id not in self.station_metadata.runs.keys():
             self.station_metadata.runs[0].update(self.run_metadata)
         self.station_metadata.update_time_period()
+        # drop the placeholder channel the station_metadata setter may have
+        # listed for a run without channels
+        self.station_metadata.update_channels_recorded()
         self.survey_metadata.update_time_period()
 
     def set_dataset(
