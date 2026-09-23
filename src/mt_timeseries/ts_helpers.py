@@ -240,15 +240,21 @@ def make_dt_coordinates(
             end_time = MTime(time_stamp=end_time)
     # dt_freq = "{0:.0f}N".format(1.0e9 / (sample_rate))
 
-    # unit="ns": pandas >= 3 takes the unit from the digits of the end time,
-    # us for some n_samples, which truncates the steps of a rate such as
-    # 10.00064 Hz to whole microseconds
-    dt_index = pd.date_range(
-        start=start_time.iso_no_tz,
-        end=end_time.iso_no_tz,
-        periods=int(round(n_samples)),
-        unit="ns",
+    whole_ns = _whole_ns_step_index(
+        start_time.iso_no_tz, end_time.iso_no_tz, int(round(n_samples))
     )
+    if whole_ns is not None:
+        dt_index, first_ns, step_ns = whole_ns
+    else:
+        # unit="ns": pandas >= 3 takes the unit from the digits of the end
+        # time, us for some n_samples, which truncates the steps of a rate
+        # such as 10.00064 Hz to whole microseconds
+        dt_index = pd.date_range(
+            start=start_time.iso_no_tz,
+            end=end_time.iso_no_tz,
+            periods=int(round(n_samples)),
+            unit="ns",
+        )
 
     ## need to enforce some rounding errors otherwise an expected time step
     ## will have a rounding error, messes things up when reindexing.
@@ -259,14 +265,59 @@ def make_dt_coordinates(
     else:
         test_sf = sr_sig_figs
     if test_sf < 3:
-        dt_index = dt_index.round(freq="ms")
+        freq = "ms"
     elif test_sf >= 3 and test_sf < 6:
-        dt_index = dt_index.round(freq="us")
+        freq = "us"
     elif test_sf >= 6 and test_sf < 9:
-        dt_index = dt_index.round(freq="ns")
+        freq = "ns"
     else:
-        pass
+        freq = None
+    if freq is not None:
+        unit_ns = {"ms": 1_000_000, "us": 1_000, "ns": 1}[freq]
+        # an index of whole-ns steps on that unit's grid would round to itself
+        if whole_ns is None or first_ns % unit_ns or step_ns % unit_ns:
+            dt_index = dt_index.round(freq=freq)
     return dt_index
+
+
+def _whole_ns_step_index(
+    start: str, end: str, periods: int
+) -> tuple[pd.DatetimeIndex, int, int] | None:
+    """
+    pd.date_range(start, end, periods=periods, unit="ns") when it steps by a
+    whole number of ns, built without date_range's float intermediates.
+
+    date_range puts sample k at start + floor(k * step), with step =
+    (end - start) / (periods - 1) in float64 (numpy.linspace). When step is a
+    whole number and end - start is under 2**53 ns, k * step is exact and
+    the sample is start + k * step, computed here in int64.
+
+    Parameters
+    ----------
+    start, end : str
+        First and last time stamps, as date_range takes them.
+    periods : int
+        Number of samples.
+
+    Returns
+    -------
+    tuple[pandas.DatetimeIndex, int, int] | None
+        The index, its first time stamp and its step in ns, or None when the
+        step is not a whole number of ns.
+    """
+    if periods < 2:
+        return None
+    first_ns = pd.Timestamp(start).as_unit("ns").value
+    span_ns = pd.Timestamp(end).as_unit("ns").value - first_ns
+    step = span_ns / (periods - 1)
+    if not (0 < span_ns < 2**53 and step.is_integer()):
+        return None
+    step = int(step)
+    values = np.arange(first_ns, first_ns + periods * step, step, dtype=np.int64)
+    if values.size != periods:
+        return None
+    dt_index = pd.DatetimeIndex(values.view("datetime64[ns]"), copy=False)
+    return dt_index, first_ns, step
 
 
 def sample_rate_matches_step(

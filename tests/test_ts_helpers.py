@@ -9,6 +9,7 @@ import sys
 import unittest
 
 import numpy as np
+import pandas as pd
 
 # =============================================================================
 # Imports
@@ -17,6 +18,7 @@ from mt_metadata.common.mttime import MTime
 
 from mt_timeseries.ts_helpers import (
     _count_decimal_sig_figs,
+    _whole_ns_step_index,
     get_decimation_sample_rates,
     make_dt_coordinates,
     sample_rate_matches_step,
@@ -187,6 +189,53 @@ class TestMakeDtCoordinatesResolution(unittest.TestCase):
     def test_whole_microsecond_rate(self):
         dt = make_dt_coordinates("2020-01-01T00:00:00", 1000, 3_600_000)
         self.assertEqual(set(np.diff(dt.asi8)), {1_000_000})
+
+
+class TestMakeDtCoordinatesWholeNsSteps(unittest.TestCase):
+    """Whole-ns steps are built in int64: the same index as date_range gives"""
+
+    @staticmethod
+    def date_range_index(start, sample_rate, n_samples):
+        start = MTime(time_stamp=start)
+        end = start + (n_samples - 1) / sample_rate
+        dt = pd.date_range(
+            start=start.iso_no_tz, end=end.iso_no_tz, periods=n_samples, unit="ns"
+        )
+        test_sf = max(
+            _count_decimal_sig_figs(str(start)),
+            _count_decimal_sig_figs(1 / sample_rate),
+        )
+        for freq, limit in [("ms", 3), ("us", 6), ("ns", 9)]:
+            if test_sf < limit:
+                return dt.round(freq=freq)
+        return dt
+
+    def test_same_as_date_range(self):
+        for sample_rate in [1, 8, 10, 128, 256, 1000, 1024, 4096, 24000, 0.1, 1.5]:
+            for n_samples in [2, 3, 101, 36001]:
+                for start in [
+                    "2020-01-01T00:00:00",
+                    "2023-09-22T13:51:26.001",
+                    "2020-01-01T00:00:00.123456",
+                ]:
+                    with self.subTest(f"{sample_rate} Hz {n_samples} {start}"):
+                        pd.testing.assert_index_equal(
+                            make_dt_coordinates(start, sample_rate, n_samples),
+                            self.date_range_index(start, sample_rate, n_samples),
+                            exact=True,
+                        )
+
+    def test_whole_ns_path(self):
+        with self.subTest("1000 Hz"):
+            self.assertIsNotNone(
+                _whole_ns_step_index(
+                    "2023-09-22T13:51:26.001", "2023-09-22T13:51:27.001", 1001
+                )
+            )
+        with self.subTest("1024 Hz"):
+            self.assertIsNone(
+                _whole_ns_step_index("2020-01-01T00:00:00", "2020-01-01T00:00:01", 1025)
+            )
 
 
 class TestSampleRateMatchesStep(unittest.TestCase):
