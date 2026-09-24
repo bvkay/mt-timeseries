@@ -18,10 +18,12 @@ from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from mt_metadata import timeseries as metadata
 
 import mt_timeseries as timeseries
 import mt_timeseries.channel_ts as channel_ts_module
+from mt_timeseries.ts_helpers import make_dt_coordinates
 
 OBSPY_AVAILABLE = importlib.util.find_spec("obspy") is not None
 
@@ -667,6 +669,65 @@ class TestChannelTSNonIntegerSampleRate:
             data=pd.DataFrame({"data": np.zeros(index.size)}, index=index),
         )
         assert ts.sample_rate == 1000.0
+
+
+class TestChannelTSSharedTimeIndex:
+    """Channels with one start, rate and length hold one time index"""
+
+    @staticmethod
+    def make_channel(component, sample_rate=1000.0, n_samples=3600, start=None):
+        ch_metadata = metadata.Magnetic(component=component, sample_rate=sample_rate)
+        ch_metadata.time_period.start = start or "2023-09-22T13:51:26.001+00:00"
+        return timeseries.ChannelTS(
+            "magnetic", data=np.arange(float(n_samples)), channel_metadata=ch_metadata
+        )
+
+    def test_shared(self, subtests):
+        hx, hy = self.make_channel("hx"), self.make_channel("hy")
+        with subtests.test(name="one index"):
+            assert np.shares_memory(
+                hx.data_array.indexes["time"].asi8, hy.data_array.indexes["time"].asi8
+            )
+        with subtests.test(name="data not copied"):
+            data = np.arange(3600.0)
+            ch_metadata = metadata.Magnetic(component="hz", sample_rate=1000.0)
+            ts = timeseries.ChannelTS(
+                "magnetic", data=data, channel_metadata=ch_metadata
+            )
+            assert np.shares_memory(ts.ts, data)
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            {"sample_rate": 500.0},
+            {"n_samples": 3601},
+            {"start": "2023-09-22T13:51:26.002+00:00"},
+        ],
+    )
+    def test_not_shared(self, other):
+        hx, hy = self.make_channel("hx"), self.make_channel("hy", **other)
+        assert not np.shares_memory(
+            hx.data_array.indexes["time"].asi8, hy.data_array.indexes["time"].asi8
+        )
+
+    @pytest.mark.parametrize("sample_rate", [1000.0, 1024.0, 10.00064])
+    def test_same_as_data_array(self, sample_rate):
+        """The DataArray is the one xr.DataArray(coords=...) gives"""
+        self.make_channel("hy", sample_rate)
+        hx = self.make_channel("hx", sample_rate)
+        expected = xr.DataArray(
+            np.arange(3600.0),
+            coords=[
+                (
+                    "time",
+                    make_dt_coordinates(
+                        "2023-09-22T13:51:26.001+00:00", sample_rate, 3600
+                    ),
+                )
+            ],
+            name="hx",
+        )
+        assert hx.data_array.drop_attrs().identical(expected)
 
 
 # =============================================================================

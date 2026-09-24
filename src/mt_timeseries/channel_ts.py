@@ -20,6 +20,7 @@ from __future__ import annotations
 # Imports
 # ==============================================================================
 import inspect
+import weakref
 from typing import Any
 
 import mt_metadata.timeseries as metadata
@@ -51,6 +52,10 @@ from .ts_helpers import (
 # make a dictionary of available metadata classes
 # =============================================================================
 meta_classes = dict(inspect.getmembers(metadata, inspect.isclass))
+
+# time indexes of live ChannelTS objects by (start, sample rate, n_samples),
+# so that channels of one run built one after another share one index
+_TIME_INDEXES: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 
 
 def _obspy_import_error_message() -> str:
@@ -863,11 +868,24 @@ class ChannelTS:
             else:
                 raise ValueError("Channel 'component' cannot be None")
 
+    def _time_index_key(self, n_samples: int) -> tuple | None:
+        """
+        (start, sample rate, n_samples) of a time index at the metadata
+        sample rate, None when the metadata has no rate.
+        """
+        sample_rate = self.channel_metadata.sample_rate
+        if sample_rate in [0.0, None]:
+            return None
+        return (self.start.isoformat(), sample_rate, n_samples)
+
     def _make_time_index(self, n_samples: int) -> pd.DatetimeIndex:
         """
         Time index of n_samples from the start time at the metadata sample
         rate, not the sample_rate property, which rounds it to an integer
         while the channel has no data.
+
+        The index of a live ChannelTS with the same start, rate and length is
+        the same index, and is reused rather than built again.
 
         Parameters
         ----------
@@ -879,11 +897,13 @@ class ChannelTS:
         pandas.DatetimeIndex
             Time index.
         """
-        sample_rate = self.channel_metadata.sample_rate
-        if sample_rate in [0.0, None]:
+        key = self._time_index_key(n_samples)
+        if key is None:
             return make_dt_coordinates(self.start, self.sample_rate, n_samples)
-        dt = make_dt_coordinates(self.start, sample_rate, n_samples)
-        self._sample_rate = sample_rate
+        dt = _TIME_INDEXES.get(key)
+        if dt is None:
+            dt = make_dt_coordinates(self.start, key[1], n_samples)
+        self._sample_rate = key[1]
         return dt
 
     def _check_pd_index(self, ts_arr: pd.DataFrame | pd.Series) -> pd.DatetimeIndex:
@@ -1026,10 +1046,14 @@ class ChannelTS:
                     msg = f"Input array must be 1-D array not {ts_arr.shape}"
                     self.logger.error(msg)
                     raise ValueError(msg)
+            key = self._time_index_key(ts_arr.size)
             dt = self._make_time_index(ts_arr.size)
-            self.data_array = xr.DataArray(
-                ts_arr, coords=[("time", dt)], name=self.component
-            )
+            # through a Dataset: xr.DataArray(coords=...) copies the index
+            name = self.component
+            dataset = xr.Dataset({name: ("time", ts_arr)}, coords={"time": dt})
+            self.data_array = dataset[name]
+            if key is not None:
+                _TIME_INDEXES[key] = self.data_array.indexes["time"]
             self._update_xarray_metadata()
         elif isinstance(ts_arr, pd.core.frame.DataFrame):
             ts_arr, dt = self._validate_dataframe_input(ts_arr)
