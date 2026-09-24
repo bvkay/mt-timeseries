@@ -19,6 +19,7 @@ from __future__ import annotations
 # =============================================================================
 import numpy as np
 import pandas as pd
+import scipy
 from loguru import logger
 from mt_metadata.common.mttime import MTime
 
@@ -318,6 +319,51 @@ def _whole_ns_step_index(
         return None
     dt_index = pd.DatetimeIndex(values.view("datetime64[ns]"), copy=False)
     return dt_index, first_ns, step
+
+
+def most_common_step(time_index: pd.DatetimeIndex) -> float:
+    """
+    Most common step of a time index in seconds, the smallest of equally
+    common ones, as scipy.stats.mode of its steps gives it.
+
+    The steps of a regular index lie within a few ns of each other, so they
+    are counted, a block of 2**16 at a time (np.bincount when a block holds
+    more than one value), instead of sorted; other indexes go through
+    scipy.stats.mode.
+
+    Parameters
+    ----------
+    time_index : pandas.DatetimeIndex
+        Time index.
+
+    Returns
+    -------
+    float
+        Most common step in seconds.
+    """
+    if (
+        isinstance(time_index, pd.DatetimeIndex)
+        and time_index.size > 1
+        and not time_index.hasnans
+    ):
+        values = time_index.asi8
+        counts = {}
+        for first in range(0, values.size - 1, 2**16):
+            steps = np.diff(values[first : first + 2**16 + 1])
+            low, high = steps.min(), steps.max()
+            if high - low >= 2**16:
+                break
+            if low == high:
+                counts[low] = counts.get(low, 0) + steps.size
+                continue
+            block = np.bincount(steps - low)
+            for k in np.flatnonzero(block):
+                counts[low + k] = counts.get(low + k, 0) + block[k]
+        else:
+            step = min(counts, key=lambda value: (-counts[value], value))
+            return np.timedelta64(step, time_index.unit) / np.timedelta64(1, "s")
+    best_dt, counts = scipy.stats.mode(np.diff(time_index) / np.timedelta64(1, "s"))
+    return best_dt
 
 
 def sample_rate_matches_step(
