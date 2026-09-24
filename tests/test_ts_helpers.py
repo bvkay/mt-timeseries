@@ -10,6 +10,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
+import scipy
 
 # =============================================================================
 # Imports
@@ -21,6 +22,7 @@ from mt_timeseries.ts_helpers import (
     _whole_ns_step_index,
     get_decimation_sample_rates,
     make_dt_coordinates,
+    most_common_step,
     sample_rate_matches_step,
 )
 
@@ -236,6 +238,40 @@ class TestMakeDtCoordinatesWholeNsSteps(unittest.TestCase):
             self.assertIsNone(
                 _whole_ns_step_index("2020-01-01T00:00:00", "2020-01-01T00:00:01", 1025)
             )
+
+
+class TestMostCommonStep(unittest.TestCase):
+    """Counted steps give what scipy.stats.mode of the steps gives"""
+
+    def test_same_as_scipy_mode(self):
+        rng = np.random.default_rng(0)
+        regular = make_dt_coordinates("2023-09-22T13:51:26.001", 1000, 36001)
+        indexes = {
+            "1000 Hz": regular,
+            "1.5 Hz": make_dt_coordinates("2020-01-01T00:00:00", 1.5, 36000),
+            "10.00064 Hz": make_dt_coordinates("2020-01-01T00:00:00", 10.00064, 3600),
+            "1024 Hz": make_dt_coordinates("2020-01-01T00:00:00", 1024, 5000),
+            "gap": regular.delete(slice(500, 510)),
+            "us unit": pd.date_range("2020-01-01", periods=5000, freq="7us", unit="us"),
+            "irregular": pd.DatetimeIndex(
+                np.cumsum(rng.integers(1, 10**9, 1000)).view("datetime64[ns]")
+            ),
+            "two samples": regular[:2],
+            "blocks tie": pd.DatetimeIndex(
+                np.cumsum(np.r_[0, np.full(70000, 1001), np.full(70000, 1000)]).view(
+                    "datetime64[ns]"
+                )
+            ),
+            "tie": pd.DatetimeIndex(
+                np.cumsum(np.r_[0, np.tile([1001, 1000], 500)]).view("datetime64[ns]")
+            ),
+        }
+        for label, time_index in indexes.items():
+            with self.subTest(label):
+                expected, counts = scipy.stats.mode(
+                    np.diff(time_index) / np.timedelta64(1, "s")
+                )
+                self.assertEqual(most_common_step(time_index), expected)
 
 
 class TestSampleRateMatchesStep(unittest.TestCase):

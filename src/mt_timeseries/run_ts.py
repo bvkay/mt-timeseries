@@ -23,7 +23,6 @@ from __future__ import annotations
 import inspect
 
 import numpy as np
-import scipy
 import xarray as xr
 from loguru import logger
 from matplotlib import pyplot as plt
@@ -42,6 +41,7 @@ from .channel_ts import ChannelTS
 from .ts_helpers import (
     get_decimation_sample_rates,
     make_dt_coordinates,
+    most_common_step,
     sample_rate_matches_step,
 )
 
@@ -1364,22 +1364,20 @@ class RunTS:
 
         Notes
         -----
-        Uses scipy.stats.mode to find the most common time difference.
+        Uses the most common time difference (see most_common_step).
 
         """
 
         try:
-            dt_array = np.diff(self.dataset.coords["time"].to_index()) / np.timedelta64(
-                1, "s"
-            )
-            best_dt, counts = scipy.stats.mode(dt_array)
+            time_index = self.dataset.coords["time"].to_index()
+            best_dt = most_common_step(time_index)
             candidates = [
                 self.dataset[ch].attrs.get("sample_rate") for ch in self.channels
             ]
             candidates.append(round(1.0 / np.float64(best_dt), 0))
             for sample_rate in candidates:
                 if isinstance(sample_rate, float) and sample_rate_matches_step(
-                    sample_rate, best_dt, dt_array.size + 1
+                    sample_rate, best_dt, time_index.size
                 ):
                     return sample_rate
             return 1.0 / np.float64(best_dt)
