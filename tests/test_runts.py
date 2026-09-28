@@ -937,6 +937,18 @@ class TestRunTSNonIntegerSampleRate:
         with subtests.test(name="channel_index"):
             assert hx.data_array.indexes["time"].equals(run.dataset.indexes["time"])
 
+    @pytest.mark.parametrize(
+        "declared, expected", [(10.00064, 10.00064), (10.0, 10.000640040962622)]
+    )
+    def test_declared_rate(self, declared, expected, subtests):
+        """Only a declared rate with a period within 1 ns of the channel step is kept"""
+        run = self.make_run(10.000640040962622, declared)
+
+        with subtests.test(name="sample_rate"):
+            assert run.sample_rate == expected
+        with subtests.test(name="run_metadata"):
+            assert run.run_metadata.sample_rate == expected
+
     @pytest.mark.parametrize("n_samples", [3, 10, 101])
     def test_short_run(self, n_samples):
         """The end time is rounded to the microsecond: 2048 Hz stays 2048"""
