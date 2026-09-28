@@ -26,7 +26,6 @@ from typing import Any
 import mt_metadata.timeseries as metadata
 import numpy as np
 import pandas as pd
-import scipy
 import xarray as xr
 from loguru import logger
 from mt_metadata.common.list_dict import ListDict
@@ -45,6 +44,7 @@ from .ts_filters import RemoveInstrumentResponse
 from .ts_helpers import (
     get_decimation_sample_rates,
     make_dt_coordinates,
+    most_common_step,
     sample_rate_matches_step,
 )
 
@@ -1331,11 +1331,9 @@ class ChannelTS:
         """
         time_index = self.data_array.coords.indexes["time"]
         if self.is_high_frequency():
-            dt_array = np.diff(time_index)
-            best_dt, counts = scipy.stats.mode(dt_array)
-
-            # Calculate total seconds of the best dt and calculate sample rate
-            best_dt_seconds = float(best_dt) / 1e9
+            # in seconds: scipy.stats.mode of timedelta64 steps raises
+            # TypeError with scipy >= 1.11
+            best_dt_seconds = most_common_step(time_index)
             sr = 1 / best_dt_seconds
             steps = [best_dt_seconds]
         else:
