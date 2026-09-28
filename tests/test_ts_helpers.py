@@ -7,6 +7,7 @@ Created on Wed Mar 29 14:30:08 2023
 
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -272,6 +273,42 @@ class TestMostCommonStep(unittest.TestCase):
                     np.diff(time_index) / np.timedelta64(1, "s")
                 )
                 self.assertEqual(most_common_step(time_index), expected)
+
+    def test_block_boundary(self):
+        """The step between two blocks of 2**16 steps is counted"""
+        steps = np.full(2 * 2**16, 1_000_000, dtype=np.int64)
+        steps[::2] = 1_000_001
+        steps[[0, 2**16 - 1, 2 * 2**16 - 1]] = [1_000_000, 1_000_001, 1_000_001]
+        time_index = pd.DatetimeIndex(np.cumsum(np.r_[0, steps]).view("datetime64[ns]"))
+        expected, counts = scipy.stats.mode(
+            np.diff(time_index) / np.timedelta64(1, "s")
+        )
+        with self.subTest("mode"):
+            self.assertEqual(expected, 0.001000001)
+        with self.subTest("counted"):
+            self.assertEqual(most_common_step(time_index), expected)
+
+    def test_jittered_index(self):
+        """Steps jittered by +/-5 us go through scipy.stats.mode, regular ones not"""
+        regular = make_dt_coordinates("2023-09-22T13:51:26.001", 1000, 70001)
+        jitter = np.random.default_rng(0).integers(-5000, 5001, regular.size)
+        indexes = {
+            "regular": (regular, False),
+            "jittered": (
+                pd.DatetimeIndex((regular.asi8 + jitter).view("datetime64[ns]")),
+                True,
+            ),
+        }
+        for label, (time_index, sorted_steps) in indexes.items():
+            expected, counts = scipy.stats.mode(
+                np.diff(time_index) / np.timedelta64(1, "s")
+            )
+            with mock.patch.object(scipy.stats, "mode", wraps=scipy.stats.mode) as mode:
+                step = most_common_step(time_index)
+            with self.subTest(f"{label} step"):
+                self.assertEqual(step, expected)
+            with self.subTest(f"{label} scipy.stats.mode"):
+                self.assertEqual(mode.called, sorted_steps)
 
 
 class TestSampleRateMatchesStep(unittest.TestCase):
