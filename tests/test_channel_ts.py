@@ -13,6 +13,7 @@ Pytest suite for ChannelTS object - optimized with fixtures and subtests
 # =============================================================================
 
 import importlib.util
+import tracemalloc
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -728,6 +729,71 @@ class TestChannelTSSharedTimeIndex:
             name="hx",
         )
         assert hx.data_array.drop_attrs().identical(expected)
+
+    def test_read_only(self, subtests):
+        """A time stamp written through one channel raises ValueError"""
+        hx, hy = self.make_channel("hx"), self.make_channel("hy")
+        index = hx.data_array.indexes["time"]
+        for label, values in [
+            ("np.asarray", np.asarray(index)),
+            ("asi8", index.asi8),
+            ("coordinate values", hx.data_array["time"].values),
+        ]:
+            with subtests.test(name=label):
+                with pytest.raises(ValueError, match="read-only"):
+                    values[0] = values[1]
+        with subtests.test(name="cached index"):
+            hz = self.make_channel("hz")
+            assert hz.data_array.indexes["time"].equals(
+                make_dt_coordinates("2023-09-22T13:51:26.001+00:00", 1000.0, 3600)
+            )
+
+    def test_index_not_copied(self):
+        """The DataArray takes the cached index through a Dataset, without a copy"""
+        n_samples = 2**20
+        hx = self.make_channel("hx", n_samples=n_samples)
+        data = np.zeros(n_samples)
+        ch_metadata = metadata.Magnetic(component="hy", sample_rate=1000.0)
+        ch_metadata.time_period.start = "2023-09-22T13:51:26.001+00:00"
+        tracemalloc.start()
+        try:
+            hy = timeseries.ChannelTS(
+                "magnetic", data=data, channel_metadata=ch_metadata
+            )
+            current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert np.shares_memory(
+            hx.data_array.indexes["time"].asi8, hy.data_array.indexes["time"].asi8
+        )
+        assert peak < hx.data_array.indexes["time"].nbytes / 2
+
+    def test_owner_read_only(self):
+        """The array the shared index data belong to is read-only as well"""
+        index = self.make_channel("hx").data_array.indexes["time"]
+        owner = np.asarray(index)
+        while isinstance(owner.base, np.ndarray):
+            owner = owner.base
+        with pytest.raises(ValueError, match="read-only"):
+            owner[0] = owner[0]
+
+    def test_first_build_not_copied(self):
+        """Building the first channel allocates one index, flagged in place"""
+        self.make_channel("hy", n_samples=16)  # load the lazy imports before tracing
+        n_samples = 2**20
+        data = np.zeros(n_samples)
+        ch_metadata = metadata.Magnetic(component="hx", sample_rate=1000.0)
+        ch_metadata.time_period.start = "2023-09-22T14:00:00.001+00:00"
+        tracemalloc.start()
+        try:
+            hx = timeseries.ChannelTS(
+                "magnetic", data=data, channel_metadata=ch_metadata
+            )
+            current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        nbytes = hx.data_array.indexes["time"].nbytes
+        assert nbytes <= peak < 1.5 * nbytes
 
 
 # =============================================================================

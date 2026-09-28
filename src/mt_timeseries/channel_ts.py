@@ -58,6 +58,38 @@ meta_classes = dict(inspect.getmembers(metadata, inspect.isclass))
 _TIME_INDEXES: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 
 
+def _read_only_index(dt: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """
+    The same time index on a read-only buffer.
+
+    Channels share the indexes of _TIME_INDEXES, so a time stamp written
+    through one channel (np.asarray(index) or index.asi8, or the values of
+    the time coordinate under pandas 2) would change the other channels and
+    every channel built later from the cache. The buffer and the array the
+    index data belong to are flagged read-only, so such a write raises
+    ValueError.
+
+    Parameters
+    ----------
+    dt : pandas.DatetimeIndex
+        A new tz-naive time index, held only by the caller.
+
+    Returns
+    -------
+    pandas.DatetimeIndex
+        The same time stamps on the same buffer, now read-only.
+    """
+    values = dt.asi8
+    values.flags.writeable = False
+    owner = values
+    while isinstance(owner.base, np.ndarray):
+        owner = owner.base
+    owner.flags.writeable = False
+    return pd.DatetimeIndex(
+        values.view(f"datetime64[{dt.unit}]"), name=dt.name, copy=False
+    )
+
+
 def _obspy_import_error_message() -> str:
     return (
         "ObsPy is required for this operation but is not installed. "
@@ -885,7 +917,8 @@ class ChannelTS:
         while the channel has no data.
 
         The index of a live ChannelTS with the same start, rate and length is
-        the same index, and is reused rather than built again.
+        the same index, and is reused rather than built again; its buffer is
+        read-only (see _read_only_index).
 
         Parameters
         ----------
@@ -902,7 +935,7 @@ class ChannelTS:
             return make_dt_coordinates(self.start, self.sample_rate, n_samples)
         dt = _TIME_INDEXES.get(key)
         if dt is None:
-            dt = make_dt_coordinates(self.start, key[1], n_samples)
+            dt = _read_only_index(make_dt_coordinates(self.start, key[1], n_samples))
         self._sample_rate = key[1]
         return dt
 
