@@ -328,8 +328,10 @@ def most_common_step(time_index: pd.DatetimeIndex) -> float:
 
     The steps of a regular index lie within a few ns of each other, so they
     are counted, a block of 2**16 at a time (np.bincount when a block holds
-    more than one value), instead of sorted; other indexes go through
-    scipy.stats.mode.
+    more than one value), instead of sorted. An index with a block whose
+    steps spread over 2**16 ns or more, or take more than 2**10 values (a
+    jittered index, where counting the values one by one is slower than
+    sorting them), goes through scipy.stats.mode.
 
     Parameters
     ----------
@@ -357,7 +359,10 @@ def most_common_step(time_index: pd.DatetimeIndex) -> float:
                 counts[low] = counts.get(low, 0) + steps.size
                 continue
             block = np.bincount(steps - low)
-            for k in np.flatnonzero(block):
+            found = np.flatnonzero(block)
+            if found.size > 2**10:
+                break
+            for k in found:
                 counts[low + k] = counts.get(low + k, 0) + block[k]
         else:
             step = min(counts, key=lambda value: (-counts[value], value))
