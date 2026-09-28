@@ -671,6 +671,20 @@ class TestChannelTSNonIntegerSampleRate:
         )
         assert ts.sample_rate == 1000.0
 
+    @pytest.mark.parametrize("unit", ["ns", "us"])
+    @pytest.mark.parametrize(
+        "sample_rate, freq", [(20000.0, "50us"), (100000.0, "10us")]
+    )
+    def test_rate_high_frequency(self, sample_rate, freq, unit):
+        """An index stepping under 1e-4 s: the rate of its most common step"""
+        index = pd.date_range("2020-01-01", periods=1000, freq=freq, unit=unit)
+        ts = timeseries.ChannelTS(
+            "auxiliary",
+            data=pd.DataFrame({"data": np.zeros(index.size)}, index=index),
+        )
+        assert ts.is_high_frequency()
+        assert ts.sample_rate == sample_rate
+
 
 class TestChannelTSSharedTimeIndex:
     """Channels with one start, rate and length hold one time index"""
