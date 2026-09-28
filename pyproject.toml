@@ -31,7 +31,7 @@ dependencies = [
     "numpy",
     "scipy",
     "xarray",
-    "pandas",
+    "pandas>=2.0.0",
     "matplotlib",
     "loguru",
     "mt_metadata>=1.0.0",
