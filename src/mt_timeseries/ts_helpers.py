@@ -114,8 +114,17 @@ def _count_decimal_sig_figs(digits: float | int | str) -> int:
         1
         >>> _count_decimal_sig_figs(42)
         0
+
+    A float under 1e-4 is counted in positional notation, not as str()
+    writes it::
+
+        >>> _count_decimal_sig_figs(5e-05)
+        5
     """
 
+    if isinstance(digits, float):
+        # str(5e-05) has no decimal point: the period of 20 kHz would count 0
+        digits = np.format_float_positional(digits)
     _, _, fractional = str(digits).partition(".")
 
     return len(fractional.rstrip("0"))

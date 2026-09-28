@@ -194,6 +194,16 @@ class TestMakeDtCoordinatesResolution(unittest.TestCase):
         self.assertEqual(set(np.diff(dt.asi8)), {1_000_000})
 
 
+class TestMakeDtCoordinatesHighRate(unittest.TestCase):
+    """A period under 1e-4 s rounds the index to its own grid, not to ms"""
+
+    def test_whole_second_start(self):
+        for sample_rate in [20000, 25000, 40000, 50000, 100000, 1000000]:
+            with self.subTest(f"{sample_rate} Hz"):
+                dt = make_dt_coordinates("2020-01-01T00:00:00", sample_rate, 1001)
+                self.assertEqual(set(np.diff(dt.asi8)), {10**9 // sample_rate})
+
+
 class TestMakeDtCoordinatesWholeNsSteps(unittest.TestCase):
     """Whole-ns steps are built in int64: the same index as date_range gives"""
 
@@ -332,6 +342,11 @@ class TestSampleRateMatchesStep(unittest.TestCase):
 
 
 class TestDecimalSigFigs(unittest.TestCase):
+    def test_exponent(self):
+        for value, sig_figs in [(5e-05, 5), (2.5e-05, 6), (1e-06, 6), (1.5e-10, 11)]:
+            with self.subTest(value):
+                self.assertEqual(_count_decimal_sig_figs(value), sig_figs)
+
     def test_sig_figs(self):
         for ii in range(1, 12, 1):
             value = f".{ii:0{ii}}1"
